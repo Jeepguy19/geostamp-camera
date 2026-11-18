@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GeoStamp Field Camera</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#081425">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="GeoStamp">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: full-height three-pane app (camera / log / map) switched by a bottom tab bar.
+   Committed dark "field instrument" look: navy body, signal-orange actions, steel-blue data. */
+:root{
+  /* Atlas-style pairing: deep navy structure, signal-orange action, steel-blue data */
+  --bg:#081425; --panel:#0d1f36; --panel-2:#14304f; --line:#1d4269;
+  --fg:#eaf1fb; --fg-dim:#8ba5c6;
+  --orange:#ff7a1a; --orange-soft:#ffa259; --ink:#1a0d02;
+  --blue:#3d8ef0; --blue-deep:#1b5fb0; --blue-glow:rgba(61,142,240,.18);
+  --good:#3d8ef0; --warn:#ffb347; --bad:#ff5f52;
+  --ui:'Archivo',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --tab-h:60px;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+img,video,canvas{max-width:100%}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg);color:var(--fg);font-family:var(--ui);
+  overscroll-behavior:none;-webkit-text-size-adjust:100%;
+  display:flex;flex-direction:column;
+}
+button{font-family:inherit;color:inherit}
+h1,h2,h3{text-wrap:balance;margin:0}
+
+/* ---------- top bar ---------- */
+header{
+  flex:0 0 auto;display:flex;align-items:center;gap:10px;
+  padding-top:calc(10px + env(safe-area-inset-top,0px));padding-bottom:10px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  background:linear-gradient(180deg,#0f2440,#0b1c31);
+  border-bottom:1px solid var(--line);position:relative;
+}
+header::after{
+  content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;
+  background:linear-gradient(90deg,var(--orange) 0 32%,var(--blue-deep) 32% 100%);
+}
+.brand{font-weight:700;letter-spacing:.02em;font-size:15px}
+.brand span{color:var(--orange)}
+.brand{color:#dce9fb}
+.chips{margin-left:auto;display:flex;gap:6px;align-items:center}
+.chip{
+  font-family:var(--mono);font-size:10.5px;font-weight:500;letter-spacing:.04em;
+  padding:4px 7px;border-radius:5px;background:var(--panel-2);border:1px solid var(--line);
+  color:var(--fg-dim);white-space:nowrap;display:flex;align-items:center;gap:5px;
+}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--fg-dim);flex:0 0 auto}
+.chip.ok{color:var(--good)} .chip.ok .dot{background:var(--good)}
+.chip.mid{color:var(--warn)} .chip.mid .dot{background:var(--warn)}
+.chip.off{color:var(--bad)} .chip.off .dot{background:var(--bad)}
+
+/* ---------- panes ---------- */
+main{flex:1 1 auto;min-height:0;position:relative}
+.pane{position:absolute;inset:0;display:flex;flex-direction:column;min-height:0}
+.pane[hidden]{display:none!important}
+
+/* ---------- camera ---------- */
+#stage{
+  flex:1 1 auto;min-height:0;position:relative;background:#000;
+  display:flex;align-items:center;justify-content:center;overflow:hidden;
+}
+#video{width:100%;height:100%;object-fit:cover;display:block}
+#shot{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+#hud{
+  position:absolute;left:0;right:0;bottom:0;
+  padding:10px max(14px,env(safe-area-inset-left,0px)) 12px max(14px,env(safe-area-inset-right,0px));
+  background:linear-gradient(to top,rgba(4,10,20,.9),rgba(4,10,20,.55) 60%,transparent);
+  font-family:var(--mono);font-size:12px;line-height:1.5;pointer-events:none;
+}
+#hud .l1{font-size:13px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums}
+#hud .l2{color:#c3d6f0;font-variant-numeric:tabular-nums}
+#hud .l3{color:#9fb8da;font-family:var(--ui);font-size:12px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#reticle{
+  position:absolute;top:50%;left:50%;width:54px;height:54px;transform:translate(-50%,-50%);
+  border:1px solid rgba(255,122,26,.55);border-radius:50%;pointer-events:none;
+}
+#reticle::after{content:"";position:absolute;inset:23px;background:var(--orange);border-radius:50%;box-shadow:0 0 0 3px rgba(61,142,240,.35)}
+#gate{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:14px;text-align:center;background:var(--bg);
+  padding:24px max(16px,env(safe-area-inset-left,0px)) 24px max(16px,env(safe-area-inset-right,0px));
+}
+#gate h2{font-size:19px;color:#f2f7ff}
+#gate{background:radial-gradient(120% 90% at 50% 0%,#12294a 0%,var(--bg) 70%)}
+#gate p{margin:0;max-width:34ch;color:var(--fg-dim);font-size:13.5px;line-height:1.55}
+#gate .err{color:var(--bad);font-family:var(--mono);font-size:12px;max-width:40ch}
+
+#controls{
+  flex:0 0 auto;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;
+  padding:14px max(16px,env(safe-area-inset-left,0px)) 14px max(16px,env(safe-area-inset-right,0px));
+  background:var(--panel);border-top:1px solid var(--line);
+}
+.shutter{
+  width:74px;height:74px;border-radius:50%;border:4px solid var(--panel-2);
+  background:var(--orange);color:var(--ink);font-weight:700;font-size:11px;letter-spacing:.08em;
+  display:grid;place-items:center;cursor:pointer;justify-self:center;
+  box-shadow:0 0 0 2px rgba(255,255,255,.22) inset,0 0 0 7px var(--blue-glow),0 6px 20px rgba(0,0,0,.5);
+  transition:transform .08s ease;
+}
+.shutter:active{transform:scale(.94)}
+.shutter:disabled{background:var(--panel-2);color:var(--fg-dim);box-shadow:none;cursor:default}
+.mini{
+  background:var(--panel-2);border:1px solid var(--line);border-radius:10px;
+  padding:9px 11px;font-size:12px;font-weight:600;cursor:pointer;line-height:1.2;
+}
+.mini:active{background:#1b3b60}
+.mini.wide{width:100%}
+.btn{
+  background:linear-gradient(180deg,var(--orange-soft),var(--orange));color:var(--ink);border:0;border-radius:10px;
+  padding:13px 18px;font-weight:700;font-size:14px;cursor:pointer;
+}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+.lcol{display:flex;flex-direction:column;gap:7px;align-items:flex-start}
+.rcol{display:flex;flex-direction:column;gap:7px;align-items:flex-end}
+.hint{font-family:var(--mono);font-size:10px;color:var(--fg-dim);letter-spacing:.03em}
+#fileIn{display:none}
+
+/* review bar */
+#review{
+  position:absolute;left:0;right:0;bottom:0;display:flex;gap:8px;
+  padding:12px max(14px,env(safe-area-inset-left,0px)) 14px max(14px,env(safe-area-inset-right,0px));
+  background:rgba(8,20,37,.95);border-top:1px solid var(--line);
+}
+#review .btn{flex:2 1 0}
+#review .mini{flex:1 1 0}
+#review .btn,#review .mini{flex-basis:0;min-width:0;min-width:0;text-align:center;white-space:nowrap;padding-left:10px;padding-right:10px}
+
+/* ---------- log ---------- */
+.scroll{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.scroll-in{
+  padding:14px max(16px,env(safe-area-inset-left,0px)) 24px max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:12px;
+}
+.logbar{display:flex;gap:8px;align-items:center}
+.logbar .count{font-family:var(--mono);font-size:11px;color:var(--fg-dim);margin-right:auto;letter-spacing:.04em}
+.card{
+  background:linear-gradient(180deg,#102442,#0d1f36);border:1px solid var(--line);border-radius:12px;overflow:hidden;
+  display:grid;grid-template-columns:104px 1fr;
+}
+.card img{width:104px;height:104px;object-fit:cover;display:block;background:#000;border-right:1px solid var(--line)}
+.card .meta{padding:10px 12px;min-width:0;display:flex;flex-direction:column;gap:3px}
+.card .when{color:#dce9fb;font-family:var(--mono);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.card .where{font-family:var(--mono);font-size:11px;color:var(--orange);font-variant-numeric:tabular-nums;word-break:break-word}
+.card .addr{font-size:11.5px;color:var(--fg-dim);line-height:1.4;overflow-wrap:anywhere}
+.card .acts{margin-top:auto;display:flex;flex-wrap:wrap;gap:6px;padding-top:6px}
+.card .acts a,.card .acts button{
+  font-family:var(--ui);font-size:11px;font-weight:600;text-decoration:none;cursor:pointer;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:7px;padding:6px 8px;color:var(--fg);
+}
+.card .acts .del{color:var(--bad)}
+.empty{
+  border:1px dashed var(--line);border-radius:12px;padding:26px 18px;text-align:center;color:var(--fg-dim);
+  font-size:13px;line-height:1.6;
+}
+.empty b{color:var(--fg);display:block;font-size:14px;margin-bottom:5px}
+
+/* ---------- map ---------- */
+#map{flex:1 1 auto;min-height:0;background:var(--panel-2)}
+.leaflet-container{background:#0a1b30}
+.leaflet-popup-content-wrapper{background:var(--panel);color:var(--fg);border-radius:10px}
+.leaflet-popup-tip{background:var(--panel)}
+.leaflet-popup-content{font-family:var(--mono);font-size:11.5px;margin:10px 12px;line-height:1.5}
+.leaflet-popup-content a{color:var(--orange)}
+.pin{
+  width:16px;height:16px;border-radius:50%;background:var(--orange);
+  border:2.5px solid #07101f;box-shadow:0 0 0 1.5px var(--orange),0 2px 6px rgba(0,0,0,.6);
+}
+.mapbar{
+  flex:0 0 auto;display:flex;gap:8px;align-items:center;
+  padding:10px max(16px,env(safe-area-inset-left,0px));
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+.mapbar .hint{margin-right:auto}
+
+/* ---------- tabs ---------- */
+nav{
+  flex:0 0 auto;box-shadow:0 -1px 0 var(--line);display:grid;grid-template-columns:repeat(3,1fr);
+  background:var(--panel);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px);
+}
+nav button{
+  background:none;border:0;padding:11px 4px 12px;cursor:pointer;
+  font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--fg-dim);border-top:2px solid transparent;display:flex;flex-direction:column;align-items:center;gap:4px;
+}
+nav button svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7}
+nav button[aria-current="page"]{color:var(--orange);border-top-color:var(--orange)}
+.badge{
+  font-family:var(--mono);font-size:9px;background:var(--orange);color:var(--ink);
+  border-radius:20px;padding:1px 5px;font-weight:700;
+}
+
+/* toast */
+#toast{
+  position:fixed;left:50%;transform:translateX(-50%);
+  bottom:calc(var(--tab-h) + 18px + env(safe-area-inset-bottom,0px));
+  background:var(--orange);color:var(--ink);font-size:12.5px;font-weight:600;
+  padding:9px 14px;border-radius:999px;box-shadow:0 8px 24px rgba(0,0,0,.5);
+  z-index:900;max-width:min(92vw,420px);text-align:center;
+}
+:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">GEO<span>STAMP</span></div>
+  <div class="chips">
+    <div class="chip off" id="chipGps"><span class="dot"></span><span id="gpsTxt">GPS —</span></div>
+    <div class="chip off" id="chipCam"><span class="dot"></span><span id="camTxt">CAM —</span></div>
+  </div>
+</header>
+
+<main>
+  <!-- ============ CAMERA ============ -->
+  <section class="pane" id="paneCam">
+    <div id="stage">
+      <video id="video" playsinline autoplay muted hidden></video>
+      <div id="reticle" hidden></div>
+      <img id="shot" hidden alt="Captured photo with stamp">
+
+      <div id="hud" hidden>
+        <div class="l1" id="hudWhen">—</div>
+        <div class="l2" id="hudWhere">Waiting for GPS fix…</div>
+        <div class="l3" id="hudAddr"></div>
+      </div>
+
+      <div id="gate">
+        <h2>Stamp every photo with time &amp; place</h2>
+        <p>Grants the camera and GPS, then burns the date, local time, coordinates, accuracy, address and a pinned map
+           straight into the image — so the photo carries its own proof.</p>
+        <button class="btn" id="start">Enable camera &amp; GPS</button>
+        <button class="mini" id="useNative">Use the phone's camera app instead</button>
+        <div class="err" id="gateErr" hidden></div>
+      </div>
+
+      <div id="review" hidden>
+        <button class="btn" id="save">Save photo</button>
+        <button class="mini" id="again">Retake</button>
+      </div>
+    </div>
+
+    <div id="controls">
+      <div class="lcol">
+        <button class="mini" id="flip">Flip</button>
+        <span class="hint" id="resTxt">—</span>
+      </div>
+      <button class="shutter" id="snap" disabled>SHOOT</button>
+      <div class="rcol">
+        <button class="mini" id="pickBtn">Import</button>
+        <span class="hint" id="accTxt">±— m</span>
+      </div>
+    </div>
+    <input type="file" id="fileIn" accept="image/*" capture="environment">
+  </section>
+
+  <!-- ============ LOG ============ -->
+  <section class="pane" id="paneLog" hidden>
+    <div class="scroll"><div class="scroll-in">
+      <div class="logbar">
+        <span class="count" id="logCount">0 PHOTOS</span>
+        <button class="mini" id="csv">Export CSV</button>
+        <button class="mini" id="wipe">Clear all</button>
+      </div>
+      <div id="logList"></div>
+    </div></div>
+  </section>
+
+  <!-- ============ MAP ============ -->
+  <section class="pane" id="paneMap" hidden>
+    <div class="mapbar">
+      <span class="hint" id="mapHint">Every stamped photo, dropped as a pin</span>
+      <button class="mini" id="locBtn">My location</button>
+      <button class="mini" id="fitBtn">Fit pins</button>
+    </div>
+    <div id="map"></div>
+  </section>
+</main>
+
+<nav>
+  <button id="tabCam" aria-current="page">
+    <svg viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 0 1 5.5 6h1.8l1.2-2h6.9l1.2 2h1.9A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/><circle cx="12" cy="13" r="3.6"/></svg>
+    Camera
+  </button>
+  <button id="tabLog">
+    <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M4 9.5h16M9 9.5V19"/></svg>
+    <span>Log <span class="badge" id="tabBadge" hidden>0</span></span>
+  </button>
+  <button id="tabMap">
+    <svg viewBox="0 0 24 24"><path d="M12 21s6.5-6.1 6.5-10.5A6.5 6.5 0 0 0 5.5 10.5C5.5 14.9 12 21 12 21z"/><circle cx="12" cy="10.3" r="2.4"/></svg>
+    Map
+  </button>
+</nav>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+"use strict";
+/* ============================================================
+   GeoStamp Field Camera — single file, no server, no API keys.
+   Camera: getUserMedia (fallback: native camera via file input)
+   Position: navigator.geolocation.watchPosition (high accuracy)
+   Place name: OpenStreetMap Nominatim reverse geocode (optional)
+   Burned-in map: OpenStreetMap raster tiles composited onto canvas
+   Storage: IndexedDB, on-device only
+   ============================================================ */
+
+const $ = (id) => document.getElementById(id);
+const TILE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+const ATTRIB = '© OpenStreetMap contributors';
+
+/* ---------- state ---------- */
+let stream = null, facing = "environment";
+let fix = null;             // {lat, lon, acc, alt, altAcc, heading, speed, at}
+let place = null;           // {text, lat, lon}
+let pending = null;         // {blob, url, rec} awaiting Save
+let photos = [];            // newest first
+let map = null, layer = null, meMarker = null;
+
+/* ---------- small helpers ---------- */
+function toast(msg, ms = 2200) {
+  const old = $("toast"); if (old) old.remove();
+  const t = document.createElement("div");
+  t.id = "toast"; t.textContent = msg; t.setAttribute("role", "status");
+  document.body.appendChild(t);
+  setTimeout(() => { if (t.isConnected) t.remove(); }, ms);
+}
+const pad = (n) => String(n).padStart(2, "0");
+
+function fmtDate(d) {
+  return d.toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "2-digit" });
+}
+function fmtTime(d) {
+  const t = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  let tz = "";
+  try {
+    tz = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(d)
+      .find((p) => p.type === "timeZoneName").value;
+  } catch (e) { tz = "UTC" + (d.getTimezoneOffset() > 0 ? "-" : "+") + Math.abs(d.getTimezoneOffset() / 60); }
+  return t + " " + tz;
+}
+function dms(v, isLat) {
+  const a = Math.abs(v), deg = Math.floor(a), mf = (a - deg) * 60, m = Math.floor(mf);
+  const s = ((mf - m) * 60).toFixed(1);
+  const h = isLat ? (v >= 0 ? "N" : "S") : (v >= 0 ? "E" : "W");
+  return deg + "°" + pad(m) + "'" + (s.length === 3 ? "0" + s : s) + '"' + h;
+}
+const dec = (v) => (v >= 0 ? "" : "-") + Math.abs(v).toFixed(6);
+const gmaps = (lat, lon) => "https://www.google.com/maps/search/?api=1&query=" + lat + "," + lon;
+
+function loadImg(url, ms = 7000) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const timer = setTimeout(() => { img.src = ""; rej(new Error("tile timeout")); }, ms);
+    img.onload = () => { clearTimeout(timer); res(img); };
+    img.onerror = () => { clearTimeout(timer); rej(new Error("tile error")); };
+    img.src = url;
+  });
+}
+
+/* ---------- IndexedDB ---------- */
+let dbp = null;
+function db() {
+  if (dbp) return dbp;
+  dbp = new Promise((res, rej) => {
+    let req;
+    try { req = indexedDB.open("geostamp", 1); } catch (e) { return rej(e); }
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains("photos")) d.createObjectStore("photos", { keyPath: "id" });
+    };
+    req.onsuccess = () => res(req.result);
+    req.onerror = () => rej(req.error);
+  });
+  return dbp;
+}
+async function dbAll() {
+  try {
+    const d = await db();
+    return await new Promise((res, rej) => {
+      const r = d.transaction("photos").objectStore("photos").getAll();
+      r.onsuccess = () => res(r.result || []); r.onerror = () => rej(r.error);
+    });
+  } catch (e) { return []; }
+}
+async function dbPut(rec) {
+  try {
+    const d = await db();
+    await new Promise((res, rej) => {
+      const tx = d.transaction("photos", "readwrite");
+      tx.objectStore("photos").put(rec);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+    return true;
+  } catch (e) { return false; }
+}
+async function dbDel(id) {
+  try {
+    const d = await db();
+    await new Promise((res, rej) => {
+      const tx = d.transaction("photos", "readwrite");
+      tx.objectStore("photos").delete(id);
+      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+  } catch (e) {}
+}
+
+/* ---------- geolocation ---------- */
+function startGps() {
+  if (!("geolocation" in navigator)) { setChip($("chipGps"), $("gpsTxt"), "off", "GPS N/A"); return; }
+  navigator.geolocation.watchPosition((p) => {
+    const c = p.coords;
+    fix = {
+      lat: c.latitude, lon: c.longitude, acc: c.accuracy,
+      alt: c.altitude, altAcc: c.altitudeAccuracy,
+      heading: c.heading, speed: c.speed, at: p.timestamp
+    };
+    const cls = c.accuracy <= 15 ? "ok" : c.accuracy <= 60 ? "mid" : "off";
+    setChip($("chipGps"), $("gpsTxt"), cls, "GPS ±" + Math.round(c.accuracy) + "m");
+    $("accTxt").textContent = "±" + Math.round(c.accuracy) + " m";
+    paintHud();
+    maybeGeocode();
+    if (meMarker) meMarker.setLatLng([c.latitude, c.longitude]);
+  }, (err) => {
+    setChip($("chipGps"), $("gpsTxt"), "off", "GPS BLOCKED");
+    $("hudWhere").textContent = "No position: " + err.message;
+  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+}
+
+function dist(a, b, c, d) { // metres, haversine
+  const R = 6371000, r = Math.PI / 180;
+  const dLa = (c - a) * r, dLo = (d - b) * r;
+  const x = Math.sin(dLa / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+let geocoding = false;
+async function maybeGeocode(force) {
+  if (!fix || geocoding) return;
+  if (!force && place && dist(place.lat, place.lon, fix.lat, fix.lon) < 30) return;
+  geocoding = true;
+  const lat = fix.lat, lon = fix.lon;
+  try {
+    const u = "https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=" + lat + "&lon=" + lon;
+    const r = await fetch(u, { headers: { "Accept": "application/json" } });
+    if (r.ok) {
+      const j = await r.json();
+      if (j && j.display_name) { place = { text: j.display_name, lat, lon }; paintHud(); }
+    }
+  } catch (e) { /* offline or rate-limited: the stamp just omits the address */ }
+  geocoding = false;
+}
+
+function setChip(chip, txt, cls, label) {
+  chip.className = "chip " + cls; txt.textContent = label;
+}
+
+function paintHud() {
+  const d = new Date();
+  $("hudWhen").textContent = fmtDate(d) + "  ·  " + fmtTime(d);
+  if (fix) {
+    let s = dec(fix.lat) + ", " + dec(fix.lon) + "  ±" + Math.round(fix.acc) + "m";
+    if (fix.alt != null) s += "  ·  " + Math.round(fix.alt) + "m elev";
+    $("hudWhere").textContent = s;
+  }
+  $("hudAddr").textContent = place ? place.text : "";
+}
+setInterval(() => { if (!pending) paintHud(); }, 1000);
+
+/* ---------- camera ---------- */
+async function startCam() {
+  const err = $("gateErr");
+  err.hidden = true;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    err.hidden = false;
+    err.textContent = "This browser gives the page no camera. Use “the phone's camera app instead” below.";
+    setChip($("chipCam"), $("camTxt"), "off", "CAM N/A");
+    return;
+  }
+  try {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facing }, width: { ideal: 4096 }, height: { ideal: 4096 } },
+      audio: false
+    });
+    const v = $("video");
+    v.srcObject = stream; v.hidden = false;
+    await v.play().catch(() => {});
+    $("gate").hidden = true; $("hud").hidden = false; $("reticle").hidden = false;
+    $("snap").disabled = false;
+    const tr = stream.getVideoTracks()[0];
+    const st = tr.getSettings ? tr.getSettings() : {};
+    $("resTxt").textContent = (st.width || v.videoWidth || "?") + "×" + (st.height || v.videoHeight || "?");
+    setChip($("chipCam"), $("camTxt"), "ok", "CAM LIVE");
+  } catch (e) {
+    setChip($("chipCam"), $("camTxt"), "off", "CAM BLOCKED");
+    err.hidden = false;
+    err.textContent = e.name === "NotAllowedError"
+      ? "Camera denied. Allow it in the browser's site settings, then tap Enable again — or use the phone's camera app below."
+      : (e.name === "NotFoundError" ? "No camera found on this device."
+      : (location.protocol !== "https:" && location.hostname !== "localhost"
+        ? "The camera needs HTTPS. Open this page over https:// (or localhost)."
+        : e.name + ": " + e.message));
+  }
+}
+
+/* ---------- the stamp ---------- */
+function tileX(lon, z) { return (lon + 180) / 360 * Math.pow(2, z); }
+function tileY(lat, z) {
+  const r = lat * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z);
+}
+
+/* Square OSM map with a pin at centre, drawn on its own canvas. */
+async function mapInset(lat, lon, size, z) {
+  const c = document.createElement("canvas");
+  c.width = size; c.height = size;
+  const g = c.getContext("2d");
+  g.fillStyle = "#14304f"; g.fillRect(0, 0, size, size);
+
+  const n = Math.pow(2, z);
+  const px = tileX(lon, z) * 256, py = tileY(lat, z) * 256;
+  const left = px - size / 2, top = py - size / 2;
+  const x0 = Math.floor(left / 256), x1 = Math.floor((left + size) / 256);
+  const y0 = Math.floor(top / 256), y1 = Math.floor((top + size) / 256);
+
+  const jobs = [];
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      if (y < 0 || y >= n) continue;
+      const tx = ((x % n) + n) % n;
+      const url = TILE.replace("{z}", z).replace("{x}", tx).replace("{y}", y);
+      jobs.push(loadImg(url).then((img) => {
+        g.drawImage(img, Math.round(x * 256 - left), Math.round(y * 256 - top), 256, 256);
+      }).catch(() => {}));
+    }
+  }
+  await Promise.all(jobs);
+
+  // accuracy ring (metres -> px at this latitude/zoom)
+  const mpp = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, z);
+  if (fix && fix.acc) {
+    const rr = Math.min(size / 2.2, fix.acc / mpp);
+    if (rr > 4) {
+      g.beginPath(); g.arc(size / 2, size / 2, rr, 0, Math.PI * 2);
+      g.fillStyle = "rgba(255,122,26,.20)"; g.fill();
+      g.strokeStyle = "rgba(255,122,26,.85)"; g.lineWidth = Math.max(1, size * 0.006); g.stroke();
+    }
+  }
+  // pin
+  const cx = size / 2, cy = size / 2, r = Math.max(5, size * 0.055);
+  g.beginPath();
+  g.moveTo(cx, cy + r * 2.5);
+  g.lineTo(cx - r * 0.85, cy + r * 0.75);
+  g.lineTo(cx + r * 0.85, cy + r * 0.75);
+  g.closePath();
+  g.fillStyle = "#ff7a1a"; g.fill();
+  g.strokeStyle = "#07101f"; g.lineWidth = Math.max(1, size * 0.007); g.stroke();
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2);
+  g.fillStyle = "#ff7a1a"; g.fill(); g.stroke();
+  g.beginPath(); g.arc(cx, cy, r * 0.38, 0, Math.PI * 2);
+  g.fillStyle = "#07101f"; g.fill();
+  return c;
+}
+
+function wrapText(g, text, maxW, maxLines) {
+  const words = String(text).split(/\s+/);
+  const lines = []; let line = "";
+  for (const w of words) {
+    const t = line ? line + " " + w : w;
+    if (g.measureText(t).width > maxW && line) {
+      lines.push(line); line = w;
+      if (lines.length === maxLines) break;
+    } else line = t;
+  }
+  if (lines.length < maxLines && line) lines.push(line);
+  if (lines.length === maxLines) {
+    let last = lines[maxLines - 1];
+    if (g.measureText(last).width > maxW) {
+      while (last.length > 4 && g.measureText(last + "…").width > maxW) last = last.slice(0, -1);
+      lines[maxLines - 1] = last + "…";
+    }
+  }
+  return lines;
+}
+
+/* Draws the frame + banner. Returns the record metadata used. */
+async function stampToCanvas(source, w, h) {
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const g = canvas.getContext("2d");
+  g.drawImage(source, 0, 0, w, h);
+
+  const now = new Date();
+  const base = Math.max(13, Math.round(Math.min(w, h) * 0.028));
+  const padX = Math.round(w * 0.028), padY = Math.round(base * 0.85);
+  const gap = Math.round(base * 0.42);
+
+  const lineDefs = [];
+  lineDefs.push({ txt: fmtDate(now) + "  ·  " + fmtTime(now), size: base * 1.12, weight: 600, color: "#ffffff", mono: true });
+  if (fix) {
+    let l2 = dec(fix.lat) + ", " + dec(fix.lon) + "   ±" + Math.round(fix.acc) + " m";
+    if (fix.alt != null) l2 += "   " + Math.round(fix.alt) + " m elev";
+    lineDefs.push({ txt: l2, size: base, weight: 500, color: "#ff7a1a", mono: true });
+    lineDefs.push({ txt: dms(fix.lat, true) + "   " + dms(fix.lon, false), size: base * 0.86, weight: 400, color: "#bcd2ee", mono: true });
+  } else {
+    lineDefs.push({ txt: "No GPS fix — location not recorded", size: base, weight: 500, color: "#e2544b", mono: true });
+  }
+
+  // map inset (best effort; text stamp still lands if tiles fail)
+  let inset = null;
+  const insetSize = Math.round(Math.min(Math.max(Math.min(w, h) * 0.22, 150), 380));
+  if (fix) { try { inset = await mapInset(fix.lat, fix.lon, insetSize, 16); } catch (e) { inset = null; } }
+
+  const textW = w - padX * 2 - (inset ? insetSize + padX : 0);
+  g.textBaseline = "top";
+
+  let addrLines = [];
+  if (place) {
+    g.font = "500 " + Math.round(base * 0.9) + "px 'Archivo', system-ui, sans-serif";
+    addrLines = wrapText(g, place.text, textW, 2);
+  }
+
+  let textH = 0;
+  for (const l of lineDefs) textH += Math.round(l.size * 1.28) + gap;
+  for (let i = 0; i < addrLines.length; i++) textH += Math.round(base * 0.9 * 1.3) + (i ? 0 : gap);
+  const bannerH = Math.max(textH + padY * 2, inset ? insetSize + padY * 2 : 0);
+
+  // banner
+  const grad = g.createLinearGradient(0, h - bannerH - base, 0, h);
+  grad.addColorStop(0, "rgba(4,10,20,0)");
+  grad.addColorStop(0.18, "rgba(4,10,20,.74)");
+  grad.addColorStop(1, "rgba(4,10,20,.92)");
+  g.fillStyle = grad;
+  g.fillRect(0, h - bannerH - base, w, bannerH + base);
+  g.fillStyle = "#ff7a1a";
+  g.fillRect(0, h - bannerH - base, w, Math.max(2, Math.round(h * 0.0025)));
+
+  // text block
+  let y = h - bannerH + padY;
+  for (const l of lineDefs) {
+    g.font = l.weight + " " + Math.round(l.size) + "px " + (l.mono ? "'IBM Plex Mono', ui-monospace, monospace" : "'Archivo', system-ui, sans-serif");
+    g.fillStyle = l.color;
+    let t = l.txt;
+    if (g.measureText(t).width > textW) {
+      while (t.length > 6 && g.measureText(t + "…").width > textW) t = t.slice(0, -1);
+      t += "…";
+    }
+    g.fillText(t, padX, y);
+    y += Math.round(l.size * 1.28) + gap;
+  }
+  if (addrLines.length) {
+    g.font = "500 " + Math.round(base * 0.9) + "px 'Archivo', system-ui, sans-serif";
+    g.fillStyle = "#9fb8da";
+    for (const ln of addrLines) { g.fillText(ln, padX, y); y += Math.round(base * 0.9 * 1.3); }
+  }
+
+  // inset + attribution
+  if (inset) {
+    const ix = w - padX - insetSize, iy = h - bannerH + (bannerH - insetSize) / 2;
+    g.save();
+    g.shadowColor = "rgba(0,0,0,.6)"; g.shadowBlur = insetSize * 0.08;
+    g.fillStyle = "#07101f";
+    g.fillRect(ix - 3, iy - 3, insetSize + 6, insetSize + 6);
+    g.restore();
+    g.drawImage(inset, ix, iy);
+    g.strokeStyle = "#ff7a1a"; g.lineWidth = Math.max(1.5, insetSize * 0.012);
+    g.strokeRect(ix, iy, insetSize, insetSize);
+    g.font = "400 " + Math.round(base * 0.52) + "px 'IBM Plex Mono', monospace";
+    g.fillStyle = "rgba(255,255,255,.72)";
+    const aw = g.measureText(ATTRIB).width;
+    g.fillStyle = "rgba(0,0,0,.5)";
+    g.fillRect(ix + insetSize - aw - 6, iy + insetSize - base * 0.72, aw + 6, base * 0.72);
+    g.fillStyle = "rgba(255,255,255,.8)";
+    g.fillText(ATTRIB, ix + insetSize - aw - 3, iy + insetSize - base * 0.65);
+  }
+
+  const rec = {
+    id: "p" + now.getTime() + "-" + Math.random().toString(36).slice(2, 7),
+    iso: now.toISOString(),
+    local: fmtDate(now) + " " + fmtTime(now),
+    lat: fix ? fix.lat : null, lon: fix ? fix.lon : null,
+    acc: fix ? fix.acc : null, alt: fix && fix.alt != null ? fix.alt : null,
+    addr: place ? place.text : "", w, h
+  };
+  return { canvas, rec };
+}
+
+function toBlob(canvas) {
+  return new Promise((res) => canvas.toBlob((b) => res(b), "image/jpeg", 0.92));
+}
+
+async function capture(source, w, h) {
+  $("snap").disabled = true;
+  toast("Stamping…", 1200);
+  try {
+    const { canvas, rec } = await stampToCanvas(source, w, h);
+    const blob = await toBlob(canvas);
+    if (pending && pending.url) URL.revokeObjectURL(pending.url);
+    pending = { blob, url: URL.createObjectURL(blob), rec };
+    const img = $("shot");
+    img.src = pending.url; img.hidden = false;
+    $("video").hidden = true; $("reticle").hidden = true; $("hud").hidden = true;
+    $("review").hidden = false;
+    $("controls").hidden = true;
+  } catch (e) {
+    toast("Capture failed: " + e.message, 3200);
+  }
+  $("snap").disabled = false;
+}
+
+function exitReview() {
+  if (pending && pending.url) URL.revokeObjectURL(pending.url);
+  pending = null;
+  $("shot").hidden = true; $("shot").removeAttribute("src");
+  $("review").hidden = true; $("controls").hidden = false;
+  if (stream) { $("video").hidden = false; $("reticle").hidden = false; $("hud").hidden = false; }
+  else $("gate").hidden = false;
+}
+
+/* ---------- saving ---------- */
+function filenameFor(rec) {
+  const d = new Date(rec.iso);
+  const stem = d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "-" +
+               pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+  const loc = rec.lat != null ? "_" + rec.lat.toFixed(5) + "_" + rec.lon.toFixed(5) : "";
+  return "geostamp-" + stem + loc + ".jpg";
+}
+function download(blob, name) {
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = u; a.download = name; a.rel = "noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(u), 4000);
+}
+async function savePending() {
+  if (!pending) return;
+  const rec = Object.assign({}, pending.rec, { blob: pending.blob });
+  const ok = await dbPut(rec);
+  photos.unshift(rec);
+  renderLog(); renderMap();
+  download(pending.blob, filenameFor(pending.rec));
+  toast(ok ? "Saved to the log, and to your downloads" : "Downloaded (on-device log unavailable)", 2600);
+  exitReview();
+}
+
+/* ---------- log ---------- */
+function renderLog() {
+  const list = $("logList");
+  list.innerHTML = "";
+  $("logCount").textContent = photos.length + (photos.length === 1 ? " PHOTO" : " PHOTOS");
+  const b = $("tabBadge");
+  b.hidden = photos.length === 0; b.textContent = photos.length;
+
+  if (!photos.length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.innerHTML = "<b>No photos yet</b>Shots you save appear here with their time, coordinates and address — tap a row to open the spot in Google Maps, or export the whole set as a CSV.";
+    list.appendChild(e);
+    return;
+  }
+  for (const p of photos) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const img = document.createElement("img");
+    img.alt = "Stamped photo from " + p.local;
+    if (p.blob) img.src = URL.createObjectURL(p.blob);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+
+    const when = document.createElement("div"); when.className = "when"; when.textContent = p.local;
+    const where = document.createElement("div"); where.className = "where";
+    where.textContent = p.lat != null
+      ? dec(p.lat) + ", " + dec(p.lon) + "  ±" + Math.round(p.acc) + "m"
+      : "no position recorded";
+    const addr = document.createElement("div"); addr.className = "addr"; addr.textContent = p.addr || "";
+    const acts = document.createElement("div"); acts.className = "acts";
+
+    if (p.lat != null) {
+      const a = document.createElement("a");
+      a.href = gmaps(p.lat, p.lon); a.target = "_blank"; a.rel = "noopener";
+      a.textContent = "Google Maps pin";
+      acts.appendChild(a);
+      const cp = document.createElement("button");
+      cp.textContent = "Copy coords";
+      cp.onclick = async () => {
+        const txt = dec(p.lat) + ", " + dec(p.lon);
+        try { await navigator.clipboard.writeText(txt); toast("Copied " + txt); }
+        catch (e) { toast(txt); }
+      };
+      acts.appendChild(cp);
+    }
+    if (p.blob) {
+      const dl = document.createElement("button");
+      dl.textContent = "Download";
+      dl.onclick = () => download(p.blob, filenameFor(p));
+      acts.appendChild(dl);
+    }
+    const del = document.createElement("button");
+    del.className = "del"; del.textContent = "Delete";
+    del.onclick = async () => {
+      await dbDel(p.id);
+      photos = photos.filter((x) => x.id !== p.id);
+      renderLog(); renderMap(); toast("Deleted");
+    };
+    acts.appendChild(del);
+
+    meta.append(when, where, addr, acts);
+    card.append(img, meta);
+    list.appendChild(card);
+  }
+}
+
+function exportCsv() {
+  if (!photos.length) { toast("Nothing to export yet"); return; }
+  const head = ["id", "utc_iso", "local_time", "latitude", "longitude", "accuracy_m", "altitude_m", "address", "google_maps"];
+  const q = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+  const rows = photos.slice().reverse().map((p) => [
+    p.id, p.iso, p.local,
+    p.lat != null ? p.lat.toFixed(6) : "", p.lon != null ? p.lon.toFixed(6) : "",
+    p.acc != null ? Math.round(p.acc) : "", p.alt != null ? Math.round(p.alt) : "",
+    p.addr, p.lat != null ? gmaps(p.lat, p.lon) : ""
+  ].map(q).join(","));
+  const csv = head.join(",") + "\n" + rows.join("\n");
+  download(new Blob([csv], { type: "text/csv" }), "geostamp-log.csv");
+  toast("CSV exported");
+}
+
+/* ---------- map ---------- */
+function ensureMap() {
+  if (map || typeof L === "undefined") return;
+  map = L.map("map", { zoomControl: true, attributionControl: true }).setView([39.5, -98.35], 3);
+  L.tileLayer(TILE, { maxZoom: 19, attribution: ATTRIB }).addTo(map);
+  layer = L.layerGroup().addTo(map);
+  setTimeout(() => map.invalidateSize(), 60);
+}
+function renderMap() {
+  if (!map) return;
+  layer.clearLayers();
+  const pts = photos.filter((p) => p.lat != null);
+  const icon = L.divIcon({ className: "", html: '<div class="pin"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+  for (const p of pts) {
+    const m = L.marker([p.lat, p.lon], { icon }).addTo(layer);
+    m.bindPopup(p.local + "<br>" + dec(p.lat) + ", " + dec(p.lon) +
+      (p.addr ? "<br>" + p.addr : "") +
+      '<br><a href="' + gmaps(p.lat, p.lon) + '" target="_blank" rel="noopener">Open in Google Maps</a>');
+  }
+  $("mapHint").textContent = pts.length
+    ? pts.length + (pts.length === 1 ? " pin dropped" : " pins dropped")
+    : "Every stamped photo, dropped as a pin";
+  if (fix) {
+    if (!meMarker) {
+      meMarker = L.circleMarker([fix.lat, fix.lon], {
+        radius: 7, color: "#3d8ef0", weight: 2, fillColor: "#3d8ef0", fillOpacity: .5
+      }).addTo(map).bindPopup("You are here");
+    } else meMarker.setLatLng([fix.lat, fix.lon]);
+  }
+}
+function fitPins() {
+  const pts = photos.filter((p) => p.lat != null).map((p) => [p.lat, p.lon]);
+  if (fix) pts.push([fix.lat, fix.lon]);
+  if (!pts.length) { toast("No pins yet"); return; }
+  if (pts.length === 1) map.setView(pts[0], 17);
+  else map.fitBounds(L.latLngBounds(pts).pad(0.25));
+}
+
+/* ---------- tabs ---------- */
+function show(which) {
+  const map3 = { cam: ["paneCam", "tabCam"], log: ["paneLog", "tabLog"], map: ["paneMap", "tabMap"] };
+  for (const k in map3) {
+    const on = k === which;
+    $(map3[k][0]).hidden = !on;
+    const t = $(map3[k][1]);
+    if (on) t.setAttribute("aria-current", "page"); else t.removeAttribute("aria-current");
+  }
+  if (which === "map") { ensureMap(); renderMap(); setTimeout(() => map && map.invalidateSize(), 80); }
+  try { location.hash = which; } catch (e) {}
+}
+
+/* ---------- wiring ---------- */
+$("start").onclick = () => { startCam(); startGps(); };
+$("snap").onclick = () => {
+  const v = $("video");
+  if (!stream || !v.videoWidth) { toast("Camera is not running"); return; }
+  capture(v, v.videoWidth, v.videoHeight);
+};
+$("flip").onclick = () => {
+  facing = facing === "environment" ? "user" : "environment";
+  if (stream) startCam(); else toast("Enable the camera first");
+};
+$("again").onclick = exitReview;
+$("save").onclick = savePending;
+$("pickBtn").onclick = () => $("fileIn").click();
+$("useNative").onclick = () => { startGps(); $("fileIn").click(); };
+$("fileIn").onchange = async (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!f) return;
+  if (!fix) { startGps(); toast("Getting a GPS fix — stamping with what we have"); }
+  try {
+    const bmp = await (window.createImageBitmap ? createImageBitmap(f) : (async () => {
+      const u = URL.createObjectURL(f);
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = u; });
+      return img;
+    })());
+    const w = bmp.width, h = bmp.height;
+    $("gate").hidden = true;
+    await capture(bmp, w, h);
+  } catch (err) { toast("Could not read that image"); }
+};
+$("csv").onclick = exportCsv;
+$("wipe").onclick = async () => {
+  if (!photos.length) { toast("Log is already empty"); return; }
+  const btn = $("wipe");
+  if (btn.dataset.armed !== "1") {
+    btn.dataset.armed = "1"; btn.textContent = "Tap again to clear";
+    setTimeout(() => { btn.dataset.armed = "0"; btn.textContent = "Clear all"; }, 4000);
+    return;
+  }
+  for (const p of photos) await dbDel(p.id);
+  photos = []; btn.dataset.armed = "0"; btn.textContent = "Clear all";
+  renderLog(); renderMap(); toast("Log cleared");
+};
+$("fitBtn").onclick = fitPins;
+$("locBtn").onclick = () => {
+  if (!fix) { startGps(); toast("Waiting for a GPS fix…"); return; }
+  map.setView([fix.lat, fix.lon], 17);
+};
+$("tabCam").onclick = () => show("cam");
+$("tabLog").onclick = () => show("log");
+$("tabMap").onclick = () => show("map");
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && stream) $("video").play().catch(() => {});
+});
+
+/* ---------- boot ---------- */
+(async function boot() {
+  paintHud();
+  if (!window.isSecureContext && location.hostname !== "localhost") {
+    $("gateErr").hidden = false;
+    $("gateErr").textContent = "Camera and GPS need a secure page. Open this over https:// (or localhost) — see the README.";
+  }
+  photos = (await dbAll()).sort((a, b) => (a.iso < b.iso ? 1 : -1));
+  renderLog();
+  const h = (location.hash || "").replace("#", "");
+  if (h === "log" || h === "map") show(h);
+  // Permissions API lets us resume without a second tap on a return visit.
+  try {
+    if (navigator.permissions) {
+      const cam = await navigator.permissions.query({ name: "camera" });
+      if (cam.state === "granted") { startCam(); startGps(); }
+    }
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
